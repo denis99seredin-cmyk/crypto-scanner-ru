@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto AI Dashboard</title>
+    <style>
+        body { background-color: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; margin: 0; padding: 20px; }
+        h1 { color: #58a6ff; text-align: center; font-size: 24px; }
+        .card { background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 15px; margin-bottom: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .time { color: #8b949e; font-size: 12px; margin-bottom: 10px; border-bottom: 1px solid #30363d; padding-bottom: 5px; }
+        .market { font-family: monospace; font-size: 13px; color: #7ee787; white-space: pre-wrap; margin-bottom: 15px; background: #0d1117; padding: 10px; border-radius: 5px; }
+        .analysis { font-size: 14px; line-height: 1.5; color: #e6edf3; }
+        .analysis strong { color: #ff7b72; }
+        .loading { text-align: center; color: #8b949e; }
+        .refresh-btn { display: block; width: 100%; padding: 10px; background-color: #238636; color: white; text-align: center; border-radius: 5px; text-decoration: none; margin-bottom: 20px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>📊 Crypto AI Dashboard</h1>
+    <a href="" class="refresh-btn">🔄 Обновить данные</a>
+    <div id="content"><div class="loading">Загрузка данных...</div></div>
+
+    <script>
+        async function loadData() {
+            try {
+                // Добавляем случайный параметр, чтобы браузер не кешировал файл
+                const response = await fetch('data.json?t=' + new Date().getTime());
+                if (!response.ok) throw new Error('Нет данных');
+                const data = await response.json();
+                
+                const container = document.getElementById('content');
+                if (data.length === 0) {
+                    container.innerHTML = '<div class="loading">Пока нет запусков</div>';
+                    return;
+                }
+
+                let html = '';
+                data.forEach(item => {
+                    html += `
+                        <div class="card">
+                            <div class="time">🕒 ${item.time}</div>
+                            <div class="market">${item.market}</div>
+                            <div class="analysis">${item.analysis.replace(/\n/g, '<br>')}</div>
+                        </div>
+                    `;
+                });
+                container.innerHTML = html;
+            } catch (error) {
+                document.getElementById('content').innerHTML = '<div class="loading" style="color:#ff7b72">Ошибка загрузки данных. Подождите первого запуска бота.</div>';
+            }
+        }
+        loadData();
+    </script>
+</body>
+</html>
