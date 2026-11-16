@@ -1,6 +1,7 @@
 import os
 import sys
 import html
+import time
 import requests
 from groq import Groq
 
@@ -8,6 +9,15 @@ from groq import Groq
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+# Список рабочих моделей от самой умной к самой быстрой (Fallback Pool)[reference:1]
+FALLBACK_MODELS = [
+    "openai/gpt-oss-120b",
+    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-20b",
+    "llama-3.1-8b-instant",
+    "meta-llama/llama-4-scout-17b-16e-instruct"
+]
 
 def send_telegram(text: str) -> bool:
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -34,7 +44,7 @@ def send_telegram(text: str) -> bool:
         return False
 
 def get_profitable_market_data() -> str:
-    """Ищет аномалии: высокий объем и резкие движения цены"""
+    """Сканер аномалий: объем и волатильность"""
     url = "https://api.hyperliquid.xyz/info"
     payload = {"type": "metaAndAssetCtxs"}
     
@@ -55,7 +65,6 @@ def get_profitable_market_data() -> str:
             name = asset.get("name")
             ctx = ctxs[i] if i < len(ctxs) else {}
             
-            # Пропускаем стейблкоины (USDC, USDT и т.д.)
             if name in ["USDC", "USDT", "DAI", "FDUSD"]:
                 continue
                 
@@ -65,19 +74,17 @@ def get_profitable_market_data() -> str:
                 vol_24h = float(ctx.get("dayNtlVlm", 0))
                 funding = float(ctx.get("funding", 0))
                 
-                # Считаем процент изменения за 24 часа
                 change_24h = 0.0
                 if prev_day > 0:
                     change_24h = ((mark_px - prev_day) / prev_day) * 100
                 
-                # Фильтруем совсем мертвые монеты с нулевым объемом
                 if vol_24h > 100000: 
                     coins_data.append({
                         "name": name,
                         "price": mark_px,
                         "change_24h": round(change_24h, 2),
                         "volume": vol_24h,
-                        "funding": funding * 100 # Переводим в проценты для удобства
+                        "funding": funding * 100
                     })
             except (ValueError, TypeError):
                 continue
@@ -85,13 +92,9 @@ def get_profitable_market_data() -> str:
         if not coins_data:
             return "Не удалось собрать данные по монетам."
 
-        # 1. Сортируем по объему (Топ-5 самых торгуемых)
         top_by_volume = sorted(coins_data, key=lambda x: x["volume"], reverse=True)[:5]
-        
-        # 2. Сортируем по изменению цены (Топ-5 самых волатильных - и в плюс, и в минус)
         top_movers = sorted(coins_data, key=lambda x: abs(x["change_24h"]), reverse=True)[:5]
         
-        # Объединяем списки и убираем дубликаты (используя имя монеты как ключ)
         unique_coins = {}
         for c in top_by_volume + top_movers:
             unique_coins[c["name"]] = c
@@ -117,12 +120,11 @@ def analyze_with_groq(market_data: str) -> str:
     client = Groq(api_key=GROQ_API_KEY)
     
     prompt = f"""
-    Ты профессиональный крипто-трейдер. Я собрал данные по самым активным и волатильным монетам на бирже Hyperliquid за последние 24 часа.
+    Ты профессиональный крипто-трейдер. Проанализируй данные по активным и волатильным монетам на Hyperliquid за последние 24 часа.
     
-    Твоя задача — найти 2-3 монеты, которые прямо сейчас представляют наибольший интерес для трейдинга (лонг или шорт).
-    
-    Как анализировать:
-    - Высокий положительный фандинг (Funding > 0.01%) = много лонгистов, возможен шорт-сквиз (падение).
+    Найди 2-3 монеты для потенциального трейдинга.
+    Учти:
+    - Высокий положительный фандинг (Funding > 0.01%) = много лонгистов, риск шорт-сквиза.
     - Сильное падение (Изм. 24ч < -10%) при большом объеме = возможен отскок.
     - Сильный рост (Изм. 24ч > 10%) = тренд, но риск коррекции.
     
@@ -137,17 +139,24 @@ def analyze_with_groq(market_data: str) -> str:
     {market_data}
     """
     
-    try:
-        completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=800,
-        )
-        return completion.choices[0].message.content.strip()
-    except Exception as e:
-        print(f"❌ Groq Error: {e}")
-        return f"⚠️ Ошибка ИИ-анализа: {e}"
+    # Перебираем модели, пока одна из них не ответит успешно[reference:2]
+    for model in FALLBACK_MODELS:
+        try:
+            print(f"⏳ Пробую модель: {model}...")
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=800,
+            )
+            print(f"✅ Успех с моделью: {model}")
+            return completion.choices[0].message.content.strip()
+            
+        except Exception as e:
+            print(f"⚠️ Модель {model} не сработала. Ошибка: {e}")
+            time.sleep(1) # Небольшая пауза перед следующей попыткой
+            
+    return "⚠️ Ошибка: Все доступные ИИ-модели временно недоступны."
 
 def main():
     print("🚀 Запуск умного сканера...")
