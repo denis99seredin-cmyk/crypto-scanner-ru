@@ -2,7 +2,6 @@ import os
 import sys
 import html
 import time
-from datetime import datetime, timezone
 import requests
 from groq import Groq
 
@@ -148,29 +147,6 @@ def analyze_with_groq(market_data: str) -> str:
 
     return "All models failed"
 
-def write_status(market: str, analysis: str, success: bool):
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    status = "OK" if success else "FAILED"
-
-    content = (
-        "# Crypto Scanner Status\n\n"
-        f"**Last run:** {now}\n"
-        f"**Status:** {status}\n\n"
-        "## Market data\n"
-        f"```\n{market[:1200]}\n```\n\n"
-        "## AI Analysis\n"
-        f"{analysis[:900]}\n\n"
-        "---\n"
-        "Updated every 30 min by GitHub Actions.\n"
-    )
-
-    try:
-        with open("STATUS.md", "w", encoding="utf-8") as f:
-            f.write(content)
-        print("STATUS.md updated")
-    except Exception as e:
-        print(f"Failed to write STATUS.md: {e}")
-
 def main():
     print("Starting scanner...")
 
@@ -193,8 +169,6 @@ def main():
         msg = msg[:3990] + "\n\n..."
 
     success = send_telegram(msg)
-    write_status(market_data, analysis, success)
-
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
