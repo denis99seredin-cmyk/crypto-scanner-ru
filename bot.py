@@ -2,7 +2,9 @@ import os
 import sys
 import html
 import time
+import json
 import requests
+from datetime import datetime
 from groq import Groq
 
 # --- НАСТРОЙКИ И СЕКРЕТЫ ---
@@ -10,7 +12,6 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Список рабочих моделей от самой умной к самой быстрой
 FALLBACK_MODELS = [
     "openai/gpt-oss-120b",
     "llama-3.3-70b-versatile",
@@ -35,10 +36,7 @@ def send_telegram(text: str) -> bool:
     try:
         response = requests.post(url, json=payload, timeout=15)
         print(f"TG Status: {response.status_code}")
-        if response.status_code != 200:
-            print(f"❌ TG Error: {response.text}")
-            return False
-        return True
+        return response.status_code == 200
     except Exception as e:
         print(f"❌ TG Exception: {e}")
         return False
@@ -57,7 +55,6 @@ def get_profitable_market_data() -> str:
 
         universe = data[0].get("universe", [])
         ctxs = data[1]
-        
         coins_data = []
         
         for i, asset in enumerate(universe):
@@ -120,65 +117,70 @@ def analyze_with_groq(market_data: str) -> str:
     
     prompt = f"""
     Ты профессиональный крипто-трейдер. Проанализируй данные по активным и волатильным монетам на Hyperliquid за последние 24 часа.
-    
     Найди 2-3 монеты для потенциального трейдинга.
-    Учти:
-    - Высокий положительный фандинг (Funding > 0.01%) = много лонгистов, риск шорт-сквиза.
-    - Сильное падение (Изм. 24ч < -10%) при большом объеме = возможен отскок.
-    - Сильный рост (Изм. 24ч > 10%) = тренд, но риск коррекции.
-    
-    Напиши краткий отчет:
-    1. 1-2 предложения об общем состоянии рынка.
-    2. 2-3 монеты с конкретными цифрами и идеей (Лонг/Шорт/Пауза).
-    3. Главный риск для этих идей.
-    
-    ПРАВИЛО: Пиши кратко, без воды. Максимум 800 символов. НЕ ИСПОЛЬЗУЙ Markdown, пиши обычным текстом.
-    
+    ПРАВИЛО: Пиши кратко, без воды. Максимум 800 символов. НЕ ИСПОЛЬЗУЙ Markdown.
     Данные:
     {market_data}
     """
     
     for model in FALLBACK_MODELS:
         try:
-            print(f"⏳ Пробую модель: {model}...")
             completion = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=800,
             )
-            print(f"✅ Успех с моделью: {model}")
             return completion.choices[0].message.content.strip()
-            
         except Exception as e:
-            print(f"⚠️ Модель {model} не сработала. Ошибка: {e}")
+            print(f"⚠️ Модель {model} не сработала: {e}")
             time.sleep(1)
             
     return "⚠️ Ошибка: Все доступные ИИ-модели временно недоступны."
 
+def save_to_dashboard(market_data, analysis):
+    """Сохраняет данные для онлайн-дашборда"""
+    history = []
+    # Читаем старую историю, если она есть
+    if os.path.exists("data.json"):
+        try:
+            with open("data.json", "r", encoding="utf-8") as f:
+                history = json.load(f)
+        except:
+            history = []
+    
+    # Добавляем новый результат
+    new_entry = {
+        "time": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "market": market_data,
+        "analysis": analysis
+    }
+    
+    history.insert(0, new_entry) # Новые записи сверху
+    history = history[:20] # Храним только последние 20 записей
+    
+    with open("data.json", "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, indent=4)
+
 def main():
-    print("🚀 Запуск умного сканера...")
-    
+    print("🚀 Запуск...")
     market_data = get_profitable_market_data()
-    print("✅ Данные собраны.")
-    
     analysis = analyze_with_groq(market_data)
-    print("✅ Анализ готов.")
     
+    # Сохраняем для дашборда
+    save_to_dashboard(market_data, analysis)
+    print("✅ Данные для дашборда сохранены в data.json")
+    
+    # Отправляем в ТГ
     safe_market = html.escape(market_data)
     safe_analysis = html.escape(analysis).replace("*", "")
-    
-    msg = (
-        f"<b>🔥 Hyperliquid Screener (Топ движения)</b>\n"
-        f"<code>{safe_market}</code>\n\n"
-        f"<b>🧠 Мнение ИИ:</b>\n{safe_analysis}"
-    )
+    msg = f"<b>🔥 Hyperliquid Screener</b>\n<code>{safe_market}</code>\n\n<b>🧠 ИИ:</b>\n{safe_analysis}"
     
     if len(msg) > 4000:
         msg = msg[:3990] + "\n\n<i>...обрезано...</i>"
         
-    success = send_telegram(msg)
-    sys.exit(0 if success else 1)
+    send_telegram(msg)
+    sys.exit(0)
 
 if __name__ == "__main__":
     main()
