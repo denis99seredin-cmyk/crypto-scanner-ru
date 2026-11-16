@@ -1,2 +1,4 @@
 requests
 groq
+hyperliquid-python-sdk
+eth-account
