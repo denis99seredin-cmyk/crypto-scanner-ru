@@ -1,109 +1,177 @@
 import os
 import sys
+import html
 import requests
 from groq import Groq
 
+# --- НАСТРОЙКИ И СЕКРЕТЫ ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-TOP = ["BTC", "ETH", "SOL", "HYPE", "BNB", "XRP", "DOGE", "AVAX"]
-
-def send_tg(text: str) -> bool:
+def send_telegram(text: str) -> bool:
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("No Telegram credentials")
+        print("❌ Нет доступов к Telegram")
         return False
+    
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
+    
     try:
-        r = requests.post(url, json={
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": text,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True
-        }, timeout=15)
-        print("TG:", r.status_code)
-        return r.status_code == 200
+        response = requests.post(url, json=payload, timeout=15)
+        print(f"TG Status: {response.status_code}")
+        if response.status_code != 200:
+            print(f"❌ TG Error: {response.text}")
+            return False
+        return True
     except Exception as e:
-        print("TG error:", e)
+        print(f"❌ TG Exception: {e}")
         return False
 
-def get_market() -> str:
+def get_profitable_market_data() -> str:
+    """Ищет аномалии: высокий объем и резкие движения цены"""
+    url = "https://api.hyperliquid.xyz/info"
+    payload = {"type": "metaAndAssetCtxs"}
+    
     try:
-        r = requests.post(
-            "https://api.hyperliquid.xyz/info",
-            json={"type": "metaAndAssetCtxs"},
-            timeout=12
-        )
-        r.raise_for_status()
-        data = r.json()
+        response = requests.post(url, json=payload, timeout=12)
+        response.raise_for_status()
+        data = response.json()
+        
+        if not isinstance(data, list) or len(data) < 2:
+            return "Ошибка: Неверный формат данных"
+
+        universe = data[0].get("universe", [])
+        ctxs = data[1]
+        
+        coins_data = []
+        
+        for i, asset in enumerate(universe):
+            name = asset.get("name")
+            ctx = ctxs[i] if i < len(ctxs) else {}
+            
+            # Пропускаем стейблкоины (USDC, USDT и т.д.)
+            if name in ["USDC", "USDT", "DAI", "FDUSD"]:
+                continue
+                
+            try:
+                mark_px = float(ctx.get("markPx", 0))
+                prev_day = float(ctx.get("prevDayPx", 0))
+                vol_24h = float(ctx.get("dayNtlVlm", 0))
+                funding = float(ctx.get("funding", 0))
+                
+                # Считаем процент изменения за 24 часа
+                change_24h = 0.0
+                if prev_day > 0:
+                    change_24h = ((mark_px - prev_day) / prev_day) * 100
+                
+                # Фильтруем совсем мертвые монеты с нулевым объемом
+                if vol_24h > 100000: 
+                    coins_data.append({
+                        "name": name,
+                        "price": mark_px,
+                        "change_24h": round(change_24h, 2),
+                        "volume": vol_24h,
+                        "funding": funding * 100 # Переводим в проценты для удобства
+                    })
+            except (ValueError, TypeError):
+                continue
+
+        if not coins_data:
+            return "Не удалось собрать данные по монетам."
+
+        # 1. Сортируем по объему (Топ-5 самых торгуемых)
+        top_by_volume = sorted(coins_data, key=lambda x: x["volume"], reverse=True)[:5]
+        
+        # 2. Сортируем по изменению цены (Топ-5 самых волатильных - и в плюс, и в минус)
+        top_movers = sorted(coins_data, key=lambda x: abs(x["change_24h"]), reverse=True)[:5]
+        
+        # Объединяем списки и убираем дубликаты (используя имя монеты как ключ)
+        unique_coins = {}
+        for c in top_by_volume + top_movers:
+            unique_coins[c["name"]] = c
+
+        result_lines = []
+        for c in unique_coins.values():
+            line = (f"{c['name']}: Цена {c['price']} | "
+                    f"Изм. 24ч: {c['change_24h']}% | "
+                    f"Объем: ${c['volume']:,.0f} | "
+                    f"Фандинг: {c['funding']:.4f}%")
+            result_lines.append(line)
+            
+        return "\n".join(result_lines)
+        
     except Exception as e:
-        return f"Hyperliquid error: {e}"
+        print(f"❌ Hyperliquid Error: {e}")
+        return f"⚠️ Ошибка получения данных: {e}"
 
-    if not isinstance(data, list) or len(data) < 2:
-        return "Bad response shape"
-
-    universe = data[0].get("universe", [])
-    ctxs = data[1]
-    lines = []
-
-    for i, asset in enumerate(universe):
-        name = asset.get("name")
-        if name not in TOP:
-            continue
-        ctx = ctxs[i] if i < len(ctxs) else {}
-        mark = ctx.get("markPx") or ctx.get("midPx") or "?"
-        funding = ctx.get("funding") or "?"
-        prev = ctx.get("prevDayPx") or "?"
-        vol = ctx.get("dayNtlVlm") or "?"
-        lines.append(f"{name}: {mark} | prev {prev} | fund {funding} | vol {vol}")
-
-    return "\n".join(lines) if lines else "No data"
-
-def analyze(market: str) -> str:
+def analyze_with_groq(market_data: str) -> str:
     if not GROQ_API_KEY:
-        return "Нет GROQ_API_KEY"
-
+        return "⚠️ Ошибка: Не задан GROQ_API_KEY"
+        
     client = Groq(api_key=GROQ_API_KEY)
-    prompt = f"""Ты крипто-аналитик. По данным Hyperliquid дай короткий ответ на русском:
-
-1. Общее настроение рынка (1-2 предложения)
-2. 2-3 самых интересных монеты с цифрами
-3. Один риск / на что смотреть ближайшие часы
-
-Максимум 900 символов, без воды.
-
-Данные:
-{market}"""
-
+    
+    prompt = f"""
+    Ты профессиональный крипто-трейдер. Я собрал данные по самым активным и волатильным монетам на бирже Hyperliquid за последние 24 часа.
+    
+    Твоя задача — найти 2-3 монеты, которые прямо сейчас представляют наибольший интерес для трейдинга (лонг или шорт).
+    
+    Как анализировать:
+    - Высокий положительный фандинг (Funding > 0.01%) = много лонгистов, возможен шорт-сквиз (падение).
+    - Сильное падение (Изм. 24ч < -10%) при большом объеме = возможен отскок.
+    - Сильный рост (Изм. 24ч > 10%) = тренд, но риск коррекции.
+    
+    Напиши краткий отчет:
+    1. 1-2 предложения об общем состоянии рынка.
+    2. 2-3 монеты с конкретными цифрами и идеей (Лонг/Шорт/Пауза).
+    3. Главный риск для этих идей.
+    
+    ПРАВИЛО: Пиши кратко, без воды. Максимум 800 символов. НЕ ИСПОЛЬЗУЙ Markdown, пиши обычным текстом.
+    
+    Данные:
+    {market_data}
+    """
+    
     try:
-        resp = client.chat.completions.create(
+        completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
-            max_tokens=700,
+            max_tokens=800,
         )
-        return resp.choices[0].message.content.strip()
+        return completion.choices[0].message.content.strip()
     except Exception as e:
-        return f"Groq error: {e}"
+        print(f"❌ Groq Error: {e}")
+        return f"⚠️ Ошибка ИИ-анализа: {e}"
 
 def main():
-    print("Start")
-    market = get_market()
-    print(market[:400])
-
-    analysis = analyze(market)
-
+    print("🚀 Запуск умного сканера...")
+    
+    market_data = get_profitable_market_data()
+    print("✅ Данные собраны.")
+    
+    analysis = analyze_with_groq(market_data)
+    print("✅ Анализ готов.")
+    
+    safe_market = html.escape(market_data)
+    safe_analysis = html.escape(analysis).replace("*", "")
+    
     msg = (
-        f"<b>📊 Hyperliquid Scanner</b>\n"
-        f"<code>{market[:850]}</code>\n\n"
-        f"<b>🤖 Анализ (Groq):</b>\n{analysis}"
+        f"<b>🔥 Hyperliquid Screener (Топ движения)</b>\n"
+        f"<code>{safe_market}</code>\n\n"
+        f"<b>🧠 Мнение ИИ:</b>\n{safe_analysis}"
     )
+    
     if len(msg) > 4000:
-        msg = msg[:3990] + "…"
-
-    ok = send_tg(msg)
-    print("Done, sent:", ok)
-    sys.exit(0 if ok else 1)
+        msg = msg[:3990] + "\n\n<i>...обрезано...</i>"
+        
+    success = send_telegram(msg)
+    sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
     main()
