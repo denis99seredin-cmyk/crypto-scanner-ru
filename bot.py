@@ -10,7 +10,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Список рабочих моделей от самой умной к самой быстрой (Fallback Pool)[reference:1]
+# Список рабочих моделей от самой умной к самой быстрой (если одна упадет, бот возьмет следующую)
 FALLBACK_MODELS = [
     "openai/gpt-oss-120b",
     "llama-3.3-70b-versatile",
@@ -65,6 +65,7 @@ def get_profitable_market_data() -> str:
             name = asset.get("name")
             ctx = ctxs[i] if i < len(ctxs) else {}
             
+            # Пропускаем стейблкоины
             if name in ["USDC", "USDT", "DAI", "FDUSD"]:
                 continue
                 
@@ -78,6 +79,7 @@ def get_profitable_market_data() -> str:
                 if prev_day > 0:
                     change_24h = ((mark_px - prev_day) / prev_day) * 100
                 
+                # Отсеиваем монеты с объемом меньше 100к
                 if vol_24h > 100000: 
                     coins_data.append({
                         "name": name,
@@ -92,9 +94,12 @@ def get_profitable_market_data() -> str:
         if not coins_data:
             return "Не удалось собрать данные по монетам."
 
+        # Топ-5 по объему
         top_by_volume = sorted(coins_data, key=lambda x: x["volume"], reverse=True)[:5]
+        # Топ-5 по волатильности (сильные движения)
         top_movers = sorted(coins_data, key=lambda x: abs(x["change_24h"]), reverse=True)[:5]
         
+        # Объединяем и убираем дубликаты
         unique_coins = {}
         for c in top_by_volume + top_movers:
             unique_coins[c["name"]] = c
@@ -139,7 +144,7 @@ def analyze_with_groq(market_data: str) -> str:
     {market_data}
     """
     
-    # Перебираем модели, пока одна из них не ответит успешно[reference:2]
+    # Перебираем модели, пока одна из них не ответит успешно
     for model in FALLBACK_MODELS:
         try:
             print(f"⏳ Пробую модель: {model}...")
@@ -154,7 +159,7 @@ def analyze_with_groq(market_data: str) -> str:
             
         except Exception as e:
             print(f"⚠️ Модель {model} не сработала. Ошибка: {e}")
-            time.sleep(1) # Небольшая пауза перед следующей попыткой
+            time.sleep(1) # Пауза перед следующей попыткой
             
     return "⚠️ Ошибка: Все доступные ИИ-модели временно недоступны."
 
