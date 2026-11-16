@@ -154,3 +154,48 @@ def write_status(market: str, analysis: str, success: bool):
 
     content = (
         "# Crypto Scanner Status\n\n"
+        f"**Last run:** {now}\n"
+        f"**Status:** {status}\n\n"
+        "## Market data\n"
+        f"```\n{market[:1200]}\n```\n\n"
+        "## AI Analysis\n"
+        f"{analysis[:900]}\n\n"
+        "---\n"
+        "Updated every 30 min by GitHub Actions.\n"
+    )
+
+    try:
+        with open("STATUS.md", "w", encoding="utf-8") as f:
+            f.write(content)
+        print("STATUS.md updated")
+    except Exception as e:
+        print(f"Failed to write STATUS.md: {e}")
+
+def main():
+    print("Starting scanner...")
+
+    market_data = get_profitable_market_data()
+    print("Market data collected")
+
+    analysis = analyze_with_groq(market_data)
+    print("Analysis done")
+
+    safe_market = html.escape(market_data)
+    safe_analysis = html.escape(analysis)
+
+    msg = (
+        f"<b>Hyperliquid Screener (small + strong moves)</b>\n"
+        f"<code>{safe_market}</code>\n\n"
+        f"<b>AI:</b>\n{safe_analysis}"
+    )
+
+    if len(msg) > 4000:
+        msg = msg[:3990] + "\n\n..."
+
+    success = send_telegram(msg)
+    write_status(market_data, analysis, success)
+
+    sys.exit(0 if success else 1)
+
+if __name__ == "__main__":
+    main()
