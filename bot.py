@@ -11,7 +11,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Модели по приоритету (если одна недоступна — берёт следующую)
+# Модели по приоритету
 FALLBACK_MODELS = [
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
@@ -63,119 +63,4 @@ def get_profitable_market_data() -> str:
 
         for i, asset in enumerate(universe):
             name = asset.get("name")
-            ctx = ctxs[i] if i < len(ctxs) else {}
-
-            if name in ["USDC", "USDT", "DAI", "FDUSD", "USDE", "USD1"]:
-                continue
-
-            try:
-                mark_px = float(ctx.get("markPx", 0))
-                prev_day = float(ctx.get("prevDayPx", 0))
-                vol_24h = float(ctx.get("dayNtlVlm", 0))
-                funding = float(ctx.get("funding", 0))
-
-                change_24h = 0.0
-                if prev_day > 0:
-                    change_24h = ((mark_px - prev_day) / prev_day) * 100
-
-                # Порог специально низкий под маленький депозит
-                if vol_24h > 15000:
-                    coins_data.append({
-                        "name": name,
-                        "price": mark_px,
-                        "change_24h": round(change_24h, 2),
-                        "volume": vol_24h,
-                        "funding": funding * 100,
-                    })
-            except (ValueError, TypeError):
-                continue
-
-        if not coins_data:
-            return "Не удалось собрать данные по монетам."
-
-        top_by_volume = sorted(coins_data, key=lambda x: x["volume"], reverse=True)[:4]
-        top_movers = sorted(coins_data, key=lambda x: abs(x["change_24h"]), reverse=True)[:7]
-        strong_movers = [c for c in coins_data if abs(c["change_24h"]) >= 8]
-        strong_movers = sorted(strong_movers, key=lambda x: abs(x["change_24h"]), reverse=True)[:5]
-
-        unique_coins = {}
-        for c in top_by_volume + top_movers + strong_movers:
-            unique_coins[c["name"]] = c
-
-        sorted_coins = sorted(unique_coins.values(), key=lambda x: abs(x["change_24h"]), reverse=True)
-
-        result_lines = []
-        for c in sorted_coins[:10]:
-            line = (
-                f"{c['name']}: Цена {c['price']} | "
-                f"Изм. 24ч: {c['change_24h']}% | "
-                f"Объем: ${c['volume']:,.0f} | "
-                f"Фандинг: {c['funding']:.4f}%"
-            )
-            result_lines.append(line)
-
-        return "\n".join(result_lines)
-
-    except Exception as e:
-        print(f"❌ Hyperliquid Error: {e}")
-        return f"⚠️ Ошибка получения данных: {e}"
-
-def analyze_with_groq(market_data: str) -> str:
-    if not GROQ_API_KEY:
-        return "⚠️ Ошибка: Не задан GROQ_API_KEY"
-
-    client = Groq(api_key=GROQ_API_KEY)
-
-    prompt = f"""
-Ты профессиональный крипто-трейдер с маленьким депозитом ($100–500).
-Твоя задача — искать возможности роста именно на мелких и средних монетах Hyperliquid.
-
-Приоритеты:
-- Сильные движения (от 8–10% и выше) при объёме от $15k
-- Возможность отскока после сильной просадки
-- Монеты, куда реально зайти маленькой суммой
-- Высокий положительный фандинг = риск лонг-сквиза, отрицательный = наоборот
-
-Напиши краткий отчёт:
-1. 1–2 предложения об общем состоянии рынка.
-2. 2–3 монеты с конкретными цифрами и идеей (Лонг / Шорт / Пауза).
-3. Главный риск для этих идей.
-
-ПРАВИЛА:
-- Пиши кратко, без воды
-- Максимум 800 символов
-- Не используй Markdown
-- Пиши обычным текстом
-
-Данные:
-{market_data}
-"""
-
-    for model in FALLBACK_MODELS:
-        try:
-            print(f"⏳ Пробую модель: {model}...")
-            completion = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=800,
-            )
-            print(f"✅ Успех с моделью: {model}")
-            return completion.choices[0].message.content.strip()
-        except Exception as e:
-            print(f"⚠️ Модель {model} не сработала. Ошибка: {e}")
-            time.sleep(1)
-
-    return "⚠️ Ошибка: Все доступные ИИ-модели временно недоступны."
-
-def write_status(market: str, analysis: str, success: bool):
-    """Простой онлайн-дашборд через STATUS.md в репозитории"""
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    status = "OK" if success else "FAILED"
-
-    content = f"""# Crypto Scanner Status
-
-**Последний запуск:** {now}  
-**Статус:** {status}
-
-## Последние данные (топ движения)
+            ctx = ctx
